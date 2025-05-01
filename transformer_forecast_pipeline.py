@@ -231,13 +231,13 @@ def main():
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-    # 1. Train the model
+    # 1.
     train(model, train_loader, optimizer, criterion)
 
-    # 2. Evaluate on entire test set (sliding windows)
+    # 2. 
     preds_all, actual_all = evaluate(model, test_loader, criterion)
 
-    # 3. Plot full test set predictions
+    #
     start_idx = split_idx + input_len
     end_idx = start_idx + len(preds_all)
     dates_all = df.index[start_idx:end_idx]
@@ -254,7 +254,7 @@ def main():
     plt.tight_layout()
     plt.show()
 
-    # 4. Compute and print full test metrics
+    
     mse_all = mean_squared_error(actual_all, preds_all)
     mae_all = mean_absolute_error(actual_all, preds_all)
     mape_all = mean_absolute_percentage_error(actual_all, preds_all)
@@ -262,14 +262,14 @@ def main():
     print(f"\nFull Test Set Metrics:")
     print(f"MSE: {mse_all:.4f}, MAE: {mae_all:.4f}, MAPE: {mape_all:.2%}, R2: {r2_all:.4f}")
 
-    # 5. Forecast next future values using last available window
+   
     window = test_series[-input_len:]
     win_t = torch.tensor(window, dtype=torch.float32, device=device).unsqueeze(1)
     model.eval()
     with torch.no_grad():
         preds_future = model(win_t).squeeze(1).cpu().numpy()
 
-    # 6. Get actual future values (if available) and corresponding dates
+    
     actual_future = df.iloc[split_idx:split_idx+pred_len].values
     future_dates = df.index[split_idx:split_idx+pred_len]
 
