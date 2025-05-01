@@ -140,12 +140,12 @@ def evaluate(model, loader, criterion):
             actual_all.append(y.cpu().numpy())
     preds_all = np.concatenate(preds_all, axis=1).reshape(-1, preds_all[0].shape[2])
     actual_all = np.concatenate(actual_all, axis=1).reshape(-1, actual_all[0].shape[2])
-    mse = mean_squared_error(actual_all, preds_all)
-    mae = mean_absolute_error(actual_all, preds_all)
-    mape = mean_absolute_percentage_error(actual_all, preds_all)
-    r2 = r2_score(actual_all, preds_all)
-    logger.info(f"Eval MSE: {mse:.6f}, MAE: {mae:.6f}, MAPE: {mape:.6f}, R2: {r2:.6f}")
-    print(f"Test Metrics -> MSE: {mse:.4f}, MAE: {mae:.4f}, MAPE: {mape:.2%}, R2: {r2:.4f}")
+    # mse = mean_squared_error(actual_all, preds_all)
+    # mae = mean_absolute_error(actual_all, preds_all)
+    # mape = mean_absolute_percentage_error(actual_all, preds_all)
+    # r2 = r2_score(actual_all, preds_all)
+    # logger.info(f"Eval MSE: {mse:.6f}, MAE: {mae:.6f}, MAPE: {mape:.6f}, R2: {r2:.6f}")
+    # print(f"Test Metrics -> MSE: {mse:.4f}, MAE: {mae:.4f}, MAPE: {mape:.2%}, R2: {r2:.4f}")
     return preds_all, actual_all
 
 # ------------------------ Main Function -------------------------------
@@ -174,12 +174,17 @@ def main():
 
     csv_path = '/data/train_preprocessed_flow.csv'
     df = pd.read_csv(csv_path)
+
+    # Pre process the data   
+    # ------------------------ #
     if '5 Minutes' in df.columns:
         df.rename(columns={'5 Minutes': 'DateTime'}, inplace=True)
     df['DateTime'] = pd.to_datetime(df['DateTime'], dayfirst=True, infer_datetime_format=True)
     df.set_index('DateTime', inplace=True)
     df = df.drop(['datetime', 'Unnamed: 0', 'day_of_week', '# Lane Points', '% Observed'], axis=1, errors='ignore')
     logger.info(f"Loaded and cleaned data: {df.shape}")
+    # ------------------------- #
+    # Pre processed data in df where you will have only 'DateTime' as index and all other features
 
     plt.figure(figsize=(12,6))
     plt.plot(df.index, df.iloc[:,0])
@@ -188,6 +193,9 @@ def main():
     plt.ylabel(df.columns[0])
     plt.tight_layout()
     plt.show()
+
+    # Check later on which column we would like to resample it.
+    # Data preprocessing and this viualization can be done through config file.
 
     daily_mean = df.resample('D').mean()
     plt.figure(figsize=(12,6))
@@ -199,6 +207,11 @@ def main():
     plt.legend()
     plt.tight_layout()
     plt.show()
+
+    # What would be the input_len, pred_len and train_ratio, batch_size (depends on the GPU resource), d_model should be in config file.
+    # Also num_heads, num_layers ?
+    # Rule of thumb: d_model should be divisible by num_heads.
+    # input_len = 2 × pred_len
 
     input_len, pred_len, train_ratio = 30, 20, 0.8
     total_len = len(df)
@@ -218,33 +231,69 @@ def main():
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
+    # 1. Train the model
     train(model, train_loader, optimizer, criterion)
+
+    # 2. Evaluate on entire test set (sliding windows)
     preds_all, actual_all = evaluate(model, test_loader, criterion)
 
-    window = test_series[-input_len:]
-    win_t = torch.tensor(window, dtype=torch.float32, device=device).unsqueeze(1)
-    model.eval()
-    with torch.no_grad():
-        preds = model(win_t).squeeze(1).cpu().numpy()
-    actual = df.iloc[split_idx:split_idx+pred_len].values
+    # 3. Plot full test set predictions
+    start_idx = split_idx + input_len
+    end_idx = start_idx + len(preds_all)
+    dates_all = df.index[start_idx:end_idx]
 
-    dates = df.index[split_idx:split_idx+pred_len]
-    plt.figure(figsize=(12, 2*input_size))
+    plt.figure(figsize=(12, 2 * input_size))
     for i, col in enumerate(df.columns):
-        ax = plt.subplot(input_size, 1, i+1)
-        ax.plot(dates, actual[:, i], label='Actual')
-        ax.plot(dates, preds[:, i], label='Predicted')
-        ax.set_title(col)
-        if i == input_size - 1: ax.set_xlabel('Date')
+        ax = plt.subplot(input_size, 1, i + 1)
+        ax.plot(dates_all, actual_all[:, i], label='Actual')
+        ax.plot(dates_all, preds_all[:, i], label='Predicted')
+        ax.set_title(f'Full Test Set Prediction: {col}')
+        if i == input_size - 1:
+            ax.set_xlabel('Date')
         ax.legend(loc='upper left')
     plt.tight_layout()
     plt.show()
 
-    mse_f = mean_squared_error(actual, preds)
-    mae_f = mean_absolute_error(actual, preds)
-    mape_f = mean_absolute_percentage_error(actual, preds)
-    r2_f = r2_score(actual, preds)
-    print(f"Final Forecast Metrics -> MSE:{mse_f:.4f}, MAE:{mae_f:.4f}, MAPE:{mape_f:.2%}, R2:{r2_f:.4f}")
+    # 4. Compute and print full test metrics
+    mse_all = mean_squared_error(actual_all, preds_all)
+    mae_all = mean_absolute_error(actual_all, preds_all)
+    mape_all = mean_absolute_percentage_error(actual_all, preds_all)
+    r2_all = r2_score(actual_all, preds_all)
+    print(f"\nFull Test Set Metrics:")
+    print(f"MSE: {mse_all:.4f}, MAE: {mae_all:.4f}, MAPE: {mape_all:.2%}, R2: {r2_all:.4f}")
+
+    # 5. Forecast next future values using last available window
+    window = test_series[-input_len:]
+    win_t = torch.tensor(window, dtype=torch.float32, device=device).unsqueeze(1)
+    model.eval()
+    with torch.no_grad():
+        preds_future = model(win_t).squeeze(1).cpu().numpy()
+
+    # 6. Get actual future values (if available) and corresponding dates
+    actual_future = df.iloc[split_idx:split_idx+pred_len].values
+    future_dates = df.index[split_idx:split_idx+pred_len]
+
+    plt.figure(figsize=(12, 2 * input_size))
+    for i, col in enumerate(df.columns):
+        ax = plt.subplot(input_size, 1, i + 1)
+        ax.plot(future_dates, actual_future[:, i], label='Actual Future')
+        ax.plot(future_dates, preds_future[:, i], label='Forecasted Future')
+        ax.set_title(f'Future Forecast (next {pred_len} steps): {col}')
+        if i == input_size - 1:
+            ax.set_xlabel('Date')
+        ax.legend(loc='upper left')
+    plt.tight_layout()
+    plt.show()
+
+    # 7. Compute and print metrics for future forecast window
+    mse_f = mean_squared_error(actual_future, preds_future)
+    mae_f = mean_absolute_error(actual_future, preds_future)
+    mape_f = mean_absolute_percentage_error(actual_future, preds_future)
+    r2_f = r2_score(actual_future, preds_future)
+    print(f"\nFuture Forecast Metrics (Final Window):")
+    print(f"MSE: {mse_f:.4f}, MAE: {mae_f:.4f}, MAPE: {mape_f:.2%}, R2: {r2_f:.4f}")
+
+
 
 if __name__ == '__main__':
     main()
